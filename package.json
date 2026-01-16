@@ -11,7 +11,7 @@
     "url": "https://github.com/zelosleone/Qwen-Copilot"
   },
   "engines": {
-    "vscode": "^1.96.0"
+    "vscode": "^1.108.0"
   },
   "categories": [
     "AI",
@@ -61,6 +61,7 @@
   "devDependencies": {
     "@types/node": "20.19.30",
     "@types/vscode": "1.108.1",
+    "@vscode/vsce": "3.7.1",
     "typescript": "5.9.3",
     "vitest": "4.0.17"
   },
