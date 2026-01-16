@@ -62,7 +62,7 @@
     "@types/node": "20.19.30",
     "@types/vscode": "1.108.1",
     "typescript": "5.9.3",
-    "vitest": "1.6.1"
+    "vitest": "4.0.17"
   },
   "dependencies": {
     "openai": "4.104.0"
