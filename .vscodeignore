@@ -4,4 +4,3 @@
 src/
 *.ts
 .vscodeignore
-node_modules/
