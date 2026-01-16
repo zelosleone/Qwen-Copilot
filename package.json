@@ -1,0 +1,70 @@
+{
+  "name": "vscode-qwen-copilot",
+  "displayName": "Qwen Copilot",
+  "description": "Qwen Code integration for Copilot Agent as a Language Model Chat Provider",
+  "icon": "images/Qwen_logo.png",
+  "version": "0.1.0",
+  "publisher": "DenizhanDaklr",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zelosleone/Qwen-Copilot"
+  },
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "qwen",
+        "displayName": "Qwen Code",
+        "managementCommand": "qwen-copilot.manage",
+        "modelSelector": [
+          {
+            "vendor": "qwen",
+            "kind": "text"
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "qwen-copilot.authenticate",
+        "title": "Qwen Copilot: Authenticate"
+      },
+      {
+        "command": "qwen-copilot.manage",
+        "title": "Qwen Copilot: Manage"
+      },
+      {
+        "command": "qwen-copilot.logout",
+        "title": "Qwen Copilot: Logout"
+      }
+    ]
+  },
+  "main": "./dist/extension.js",
+  "type": "commonjs",
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "tsc -p .",
+    "dev": "tsc -w -p .",
+    "test": "vitest",
+    "type-check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.30",
+    "@types/vscode": "1.108.1",
+    "typescript": "5.9.3",
+    "vitest": "1.6.1"
+  },
+  "dependencies": {
+    "openai": "4.104.0"
+  }
+}
