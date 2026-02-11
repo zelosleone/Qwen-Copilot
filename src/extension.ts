@@ -1,11 +1,8 @@
-/**
- * VS Code extension entry point
- * Registers the Qwen Language Model Chat Provider and commands
- */
-
+import { ResultAsync } from 'neverthrow'
+import { match } from 'ts-pattern'
 import * as vscode from 'vscode'
-import { QwenLanguageModelChatProvider } from './provider'
 import { authHandler } from './auth'
+import { QwenLanguageModelChatProvider } from './provider'
 import { qwenClient } from './qwen-client'
 
 const provider = new QwenLanguageModelChatProvider()
@@ -14,29 +11,19 @@ export async function activate(context: vscode.ExtensionContext) {
   console.log('Qwen Copilot extension activated')
 
   authHandler.setSecretStorage(context.secrets)
-
-  const disposable = vscode.lm.registerLanguageModelChatProvider('qwen', provider)
-  context.subscriptions.push(disposable)
+  context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider('qwen', provider))
 
   await authHandler.loadCredentials()
 
-  context.subscriptions.push(
-    vscode.commands.registerCommand('qwen-copilot.authenticate', async () => {
-      await commandAuthenticate()
-    }),
-  )
+  const commands: Array<[string, () => Promise<void>]> = [
+    ['qwen-copilot.authenticate', authenticate],
+    ['qwen-copilot.logout', logout],
+    ['qwen-copilot.manage', manage],
+  ]
 
-  context.subscriptions.push(
-    vscode.commands.registerCommand('qwen-copilot.logout', async () => {
-      await commandLogout()
-    }),
-  )
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand('qwen-copilot.manage', async () => {
-      await commandManage()
-    }),
-  )
+  for (const [command, handler] of commands) {
+    context.subscriptions.push(vscode.commands.registerCommand(command, handler))
+  }
 }
 
 export function deactivate() {
@@ -44,64 +31,48 @@ export function deactivate() {
   qwenClient.reset()
 }
 
-/**
- * Authenticate command
- * Initiates OAuth flow or shows authentication instructions
- */
-async function commandAuthenticate() {
-  try {
+async function authenticate() {
+  return runWithUiError('Authentication', async () => {
     if (authHandler.isAuthenticated()) {
       vscode.window.showInformationMessage('Already authenticated with Qwen.')
       return
     }
 
     await runDeviceFlowLogin()
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    vscode.window.showErrorMessage(`Authentication error: ${message}`)
-  }
+  })
 }
 
-/**
- * Logout command
- * Clears stored credentials
- */
-async function commandLogout() {
-  try {
+async function logout() {
+  return runWithUiError('Logout', async () => {
     await authHandler.clearCredentials()
     qwenClient.reset()
     vscode.window.showInformationMessage('Logged out from Qwen.')
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    vscode.window.showErrorMessage(`Logout error: ${message}`)
-  }
+  })
 }
 
-async function commandManage() {
+async function manage() {
   const isAuthed = authHandler.isAuthenticated()
-  const items: vscode.QuickPickItem[] = isAuthed
-    ? [
-        { label: 'Sign Out', description: 'Clear stored Qwen tokens' },
-        { label: 'Re-authenticate', description: 'Start Qwen device login in browser' },
-      ]
-    : [
-        { label: 'Sign In', description: 'Start Qwen device login in browser' },
-      ]
+  const options: vscode.QuickPickItem[] = [
+    {
+      label: 'Authenticate',
+      description: isAuthed
+        ? 'Already authenticated. Select to re-authenticate in browser'
+        : 'Start Qwen device login in browser',
+    },
+    {
+      label: 'Logout',
+      description: isAuthed ? 'Clear stored Qwen tokens' : 'No active session',
+    },
+  ]
 
-  const selection = await vscode.window.showQuickPick(items, {
+  const selection = await vscode.window.showQuickPick(options, {
     placeHolder: 'Manage Qwen Copilot authentication',
   })
 
-  if (!selection) {
-    return
-  }
-
-  if (selection.label === 'Sign Out') {
-    await commandLogout()
-    return
-  }
-
-  await runDeviceFlowLogin()
+  await match(selection?.label)
+    .with('Authenticate', () => runWithUiError('Authentication', runDeviceFlowLogin))
+    .with('Logout', () => logout())
+    .otherwise(() => Promise.resolve())
 }
 
 async function runDeviceFlowLogin() {
@@ -113,18 +84,12 @@ async function runDeviceFlowLogin() {
     },
     async (progress, cancellationToken) => {
       progress.report({ message: 'Requesting device authorization...' })
+
       const credentials = await authHandler.startDeviceFlow({
         cancellationToken,
-        onAuthUri: async ({ verificationUriComplete, userCode }) => {
+        onAuthUri: async ({ verificationUriComplete }) => {
           await vscode.env.openExternal(vscode.Uri.parse(verificationUriComplete))
-          await vscode.window.showInformationMessage(
-            `Authorize Qwen using code: ${userCode}`,
-            'Copy Code',
-          ).then((action) => {
-            if (action === 'Copy Code') {
-              void vscode.env.clipboard.writeText(userCode)
-            }
-          })
+          progress.report({ message: 'Complete sign-in in your browser...' })
         },
         onProgress: (message) => progress.report({ message }),
       })
@@ -135,4 +100,17 @@ async function runDeviceFlowLogin() {
       vscode.window.showInformationMessage('Successfully authenticated with Qwen!')
     },
   )
+}
+
+function runWithUiError(action: string, task: () => Promise<void>): Promise<void> {
+  return ResultAsync.fromPromise(task(), (error) => error)
+    .mapErr((error) => {
+      const message = error instanceof Error ? error.message : String(error)
+      vscode.window.showErrorMessage(`${action} error: ${message}`)
+      return error
+    })
+    .match(
+      () => undefined,
+      () => undefined,
+    )
 }

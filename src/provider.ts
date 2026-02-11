@@ -1,18 +1,13 @@
-/**
- * VS Code Language Model Chat Provider implementation for Qwen
- * Implements the LanguageModelChatProvider interface
- */
-
+import stringify from 'safe-stable-stringify'
+import { ResultAsync } from 'neverthrow'
+import { P, match } from 'ts-pattern'
 import * as vscode from 'vscode'
-import { qwenClient } from './qwen-client'
 import { authHandler } from './auth'
+import { qwenClient } from './qwen-client'
 import { QWEN_MODELS } from './types'
 import type { QwenMessage, QwenModelId, QwenTool, QwenToolChoice } from './types'
 
 export class QwenLanguageModelChatProvider implements vscode.LanguageModelChatProvider {
-  /**
-   * Provide information about available language models
-   */
   async provideLanguageModelChatInformation(
     _options: vscode.PrepareLanguageModelChatModelOptions,
     _token: vscode.CancellationToken,
@@ -25,16 +20,10 @@ export class QwenLanguageModelChatProvider implements vscode.LanguageModelChatPr
       detail: 'Qwen',
       maxInputTokens: model.contextWindow,
       maxOutputTokens: model.maxOutputTokens,
-      capabilities: {
-        toolCalling: true,
-      },
+      capabilities: { toolCalling: true },
     }))
   }
 
-  /**
-   * Provide language model chat response (streaming)
-   * This is called when a user sends a message to the language model
-   */
   async provideLanguageModelChatResponse(
     model: vscode.LanguageModelChatInformation,
     messages: readonly vscode.LanguageModelChatRequestMessage[],
@@ -42,144 +31,120 @@ export class QwenLanguageModelChatProvider implements vscode.LanguageModelChatPr
     progress: vscode.Progress<vscode.LanguageModelResponsePart>,
     token: vscode.CancellationToken,
   ): Promise<void> {
-    try {
-      if (!authHandler.isAuthenticated()) {
-        const action = await vscode.window.showInformationMessage(
-          'Qwen Copilot needs authentication before it can respond.',
-          'Manage Sign-In',
+    await this.ensureAuthenticated()
+    await (qwenClient.isReady() ? Promise.resolve() : qwenClient.initialize())
+
+    const tools = this.convertTools(options.tools)
+    const stream = qwenClient.streamChatCompletion({
+      model: model.id as QwenModelId,
+      messages: this.convertMessages(messages),
+      tools,
+      toolChoice: this.resolveToolChoice(options.toolMode, tools),
+      maxTokens: this.resolveMaxTokens(model, options.modelOptions),
+      temperature: this.resolveTemperature(options.modelOptions),
+    })
+
+    for await (const chunk of stream) {
+      if (token.isCancellationRequested) {
+        break
+      }
+
+      match(chunk)
+        .with({ type: 'text' }, ({ text }) => progress.report(new vscode.LanguageModelTextPart(text)))
+        .with({ type: 'tool_call' }, ({ callId, name, input }) =>
+          progress.report(new vscode.LanguageModelToolCallPart(callId, name, input)),
         )
-        if (action === 'Manage Sign-In') {
-          await vscode.commands.executeCommand('qwen-copilot.manage')
-        }
-        throw new Error('Not authenticated. Use "Qwen Copilot: Manage" to sign in.')
-      }
-
-      if (!qwenClient.isReady()) {
-        await qwenClient.initialize()
-      }
-
-      const qwenMessages = this.convertMessages(messages)
-      const tools = this.convertTools(options.tools)
-      const toolChoice = this.resolveToolChoice(options.toolMode, tools)
-      const modelId = model.id as QwenModelId
-      const maxTokens = this.resolveMaxTokens(model, options.modelOptions)
-      const temperature = this.resolveTemperature(options.modelOptions)
-      const stream = qwenClient.streamChatCompletion({
-        model: modelId,
-        messages: qwenMessages,
-        tools,
-        toolChoice,
-        maxTokens,
-        temperature,
-      })
-
-      for await (const chunk of stream) {
-        if (token.isCancellationRequested) {
-          break
-        }
-
-        if (chunk.type === 'text') {
-          progress.report(new vscode.LanguageModelTextPart(chunk.text))
-        } else {
-          progress.report(
-            new vscode.LanguageModelToolCallPart(chunk.callId, chunk.name, chunk.input),
-          )
-        }
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      throw new Error(`Qwen chat error: ${message}`)
+        .exhaustive()
     }
   }
 
-  /**
-   * Provide token count estimation for a message
-   */
-  async provideTokenCount(
+  provideTokenCount(
     _model: vscode.LanguageModelChatInformation,
     text: string | vscode.LanguageModelChatRequestMessage,
     _token: vscode.CancellationToken,
   ): Promise<number> {
-    try {
-      if (typeof text === 'string') {
-        return Math.ceil(text.length / 4)
-      }
-
-      const qwenMessages = this.convertMessages([text])
-      return await qwenClient.countTokens(qwenMessages)
-    } catch (error) {
-      console.error('Token count error:', error)
-      const content = typeof text === 'string' ? text : ''
-      return Math.ceil(content.length / 4)
+    const fallback = Math.ceil((typeof text === 'string' ? text : '').length / 4)
+    if (typeof text === 'string') {
+      return Promise.resolve(Math.ceil(text.length / 4))
     }
+
+    return ResultAsync.fromPromise(qwenClient.countTokens(this.convertMessages([text])), (error) => error)
+      .mapErr((error) => {
+        console.error('Token count error:', error)
+        return error
+      })
+      .match(
+        (count) => count,
+        () => fallback,
+      )
   }
 
-  /**
-   * Convert VS Code message format to Qwen API format
-   */
-  private convertMessages(messages: readonly vscode.LanguageModelChatRequestMessage[]): QwenMessage[] {
+  private async ensureAuthenticated(): Promise<void> {
+    if (authHandler.isAuthenticated()) {
+      return
+    }
+
+    const action = await vscode.window.showInformationMessage(
+      'Qwen Copilot needs authentication before it can respond.',
+      'Manage Sign-In',
+    )
+
+    await match(action)
+      .with('Manage Sign-In', () => vscode.commands.executeCommand('qwen-copilot.manage'))
+      .otherwise(() => Promise.resolve())
+
+    throw new Error('Not authenticated. Use "Qwen Copilot: Manage" to sign in.')
+  }
+
+  private convertMessages(
+    messages: readonly vscode.LanguageModelChatRequestMessage[],
+  ): QwenMessage[] {
     const converted: QwenMessage[] = []
 
-    for (const msg of messages) {
+    for (const message of messages) {
       const role =
-        msg.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'user'
-      let textBuffer = ''
+        message.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'user'
       const toolCalls: vscode.LanguageModelToolCallPart[] = []
+      let textBuffer = ''
 
-      for (const part of msg.content ?? []) {
-        if (part instanceof vscode.LanguageModelTextPart) {
-          textBuffer += part.value
-          continue
-        }
-
-        if (part instanceof vscode.LanguageModelToolCallPart) {
-          toolCalls.push(part)
-          continue
-        }
-
-        if (part instanceof vscode.LanguageModelToolResultPart) {
-          if (textBuffer.length > 0) {
-            converted.push(this.buildTextMessage(role, textBuffer, msg.name))
+      for (const part of message.content ?? []) {
+        match(part)
+          .with(P.instanceOf(vscode.LanguageModelToolCallPart), (call) => toolCalls.push(call))
+          .with(P.instanceOf(vscode.LanguageModelToolResultPart), (result) => {
+            this.pushTextMessage(converted, role, textBuffer, message.name)
             textBuffer = ''
-          }
-
-          converted.push({
-            role: 'tool',
-            tool_call_id: part.callId,
-            content: this.serializeToolResult(part),
+            converted.push({
+              role: 'tool',
+              tool_call_id: result.callId,
+              content: this.serializeToolResult(result),
+            })
           })
-          continue
-        }
-
-        if (part instanceof vscode.LanguageModelPromptTsxPart) {
-          textBuffer += this.safeJson(part.value)
-          continue
-        }
-
-        if (part instanceof vscode.LanguageModelDataPart) {
-          textBuffer += this.renderDataPart(part)
-          continue
-        }
-
-        textBuffer += String(part)
+          .otherwise((entry) => {
+            textBuffer += this.partToText(entry)
+          })
       }
 
-      if (role === 'assistant' && toolCalls.length > 0) {
-        converted.push(this.buildAssistantToolCallMessage(toolCalls, textBuffer, msg.name))
-      } else if (textBuffer.length > 0) {
-        converted.push(this.buildTextMessage(role, textBuffer, msg.name))
-      }
+      match<[typeof role, number]>([role, toolCalls.length])
+        .with(['assistant', P.when((count) => count > 0)], () => {
+          converted.push(this.buildAssistantToolCallMessage(toolCalls, textBuffer, message.name))
+        })
+        .otherwise(() => this.pushTextMessage(converted, role, textBuffer, message.name))
     }
 
     return converted
   }
 
-  private buildTextMessage(
+  private pushTextMessage(
+    target: QwenMessage[],
     role: 'user' | 'assistant',
     text: string,
     name?: string,
-  ): QwenMessage {
-    return name ? { role, content: text, name } : { role, content: text }
+  ): void {
+    if (!text) {
+      return
+    }
+
+    target.push(name ? { role, content: text, name } : { role, content: text })
   }
 
   private buildAssistantToolCallMessage(
@@ -187,117 +152,94 @@ export class QwenLanguageModelChatProvider implements vscode.LanguageModelChatPr
     text: string,
     name?: string,
   ): QwenMessage {
-    const callPayload = toolCalls.map((call) => ({
-      id: call.callId,
-      type: 'function' as const,
-      function: {
-        name: call.name,
-        arguments: this.safeJson(call.input ?? {}),
-      },
-    }))
-
-    const message = {
+    return {
       role: 'assistant',
-      content: text.length > 0 ? text : null,
-      tool_calls: callPayload,
+      content: text || null,
+      tool_calls: toolCalls.map((call) => ({
+        id: call.callId,
+        type: 'function',
+        function: {
+          name: call.name,
+          arguments: this.toJson(call.input ?? {}),
+        },
+      })),
       ...(name ? { name } : {}),
     } as QwenMessage
-
-    return message
   }
 
   private serializeToolResult(part: vscode.LanguageModelToolResultPart): string {
-    const chunks = part.content.map((entry) => {
-      if (entry instanceof vscode.LanguageModelTextPart) {
-        return entry.value
-      }
-      if (entry instanceof vscode.LanguageModelPromptTsxPart) {
-        return this.safeJson(entry.value)
-      }
-      if (entry instanceof vscode.LanguageModelDataPart) {
-        return this.renderDataPart(entry)
-      }
-      return this.safeJson(entry)
-    })
-
-    return chunks.join('')
+    return part.content.map((entry) => this.partToText(entry)).join('')
   }
 
-  private renderDataPart(part: vscode.LanguageModelDataPart): string {
+  private partToText(part: unknown): string {
+    return match(part)
+      .with(P.instanceOf(vscode.LanguageModelTextPart), ({ value }) => value)
+      .with(P.instanceOf(vscode.LanguageModelPromptTsxPart), ({ value }) => this.toJson(value))
+      .with(P.instanceOf(vscode.LanguageModelDataPart), (data) => this.dataPartToText(data))
+      .otherwise((value) => this.toJson(value))
+  }
+
+  private dataPartToText(part: vscode.LanguageModelDataPart): string {
     const mime = part.mimeType || 'application/octet-stream'
     const buffer = Buffer.from(part.data)
 
-    if (mime.startsWith('text/')) {
-      return buffer.toString('utf-8')
-    }
-
-    if (mime === 'application/json') {
-      return buffer.toString('utf-8')
-    }
-
-    return `[${mime} base64:${buffer.toString('base64')}]`
+    return match(mime)
+      .when((value) => value.startsWith('text/'), () => buffer.toString('utf-8'))
+      .with('application/json', () => buffer.toString('utf-8'))
+      .otherwise((value) => `[${value} base64:${buffer.toString('base64')}]`)
   }
 
-  private safeJson(value: unknown): string {
-    try {
-      return JSON.stringify(value)
-    } catch {
-      return String(value)
-    }
+  private toJson(value: unknown): string {
+    return stringify(value) ?? String(value)
   }
 
   private convertTools(
     tools: readonly vscode.LanguageModelChatTool[] | undefined,
   ): QwenTool[] | undefined {
-    if (!tools || tools.length === 0) {
-      return undefined
-    }
-
-    return tools.map((tool) => ({
-      type: 'function' as const,
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: (tool.inputSchema ?? { type: 'object', properties: {} }) as Record<
-          string,
-          any
-        >,
-      },
-    }))
+    return tools?.length
+      ? tools.map((tool) => ({
+          type: 'function',
+          function: {
+            name: tool.name,
+            description: tool.description,
+            parameters: (tool.inputSchema ?? {
+              type: 'object',
+              properties: {},
+            }) as Record<string, any>,
+          },
+        }))
+      : undefined
   }
 
   private resolveToolChoice(
     toolMode: vscode.LanguageModelChatToolMode,
     tools?: QwenTool[],
   ): QwenToolChoice | undefined {
-    if (!tools || tools.length === 0) {
-      return undefined
-    }
-
-    return toolMode === vscode.LanguageModelChatToolMode.Required ? 'required' : 'auto'
+    return tools?.length
+      ? toolMode === vscode.LanguageModelChatToolMode.Required
+        ? 'required'
+        : 'auto'
+      : undefined
   }
 
   private resolveMaxTokens(
     model: vscode.LanguageModelChatInformation,
     modelOptions?: { readonly [name: string]: any },
   ): number {
-    const requested =
-      typeof modelOptions?.maxOutputTokens === 'number'
-        ? modelOptions.maxOutputTokens
-        : typeof modelOptions?.maxTokens === 'number'
-          ? modelOptions.maxTokens
-          : typeof modelOptions?.max_tokens === 'number'
-            ? modelOptions.max_tokens
-            : undefined
+    const requested = this.firstNumber(
+      modelOptions?.maxOutputTokens,
+      modelOptions?.maxTokens,
+      modelOptions?.max_tokens,
+    )
 
-    if (typeof requested === 'number') {
-      return Math.min(requested, model.maxOutputTokens)
-    }
-
-    return model.maxOutputTokens
+    return requested !== undefined ? Math.min(requested, model.maxOutputTokens) : model.maxOutputTokens
   }
 
   private resolveTemperature(modelOptions?: { readonly [name: string]: any }): number {
-    return typeof modelOptions?.temperature === 'number' ? modelOptions.temperature : 0.3
+    return this.firstNumber(modelOptions?.temperature) ?? 0.3
+  }
+
+  private firstNumber(...values: unknown[]): number | undefined {
+    return values.find((value): value is number => typeof value === 'number')
   }
 }

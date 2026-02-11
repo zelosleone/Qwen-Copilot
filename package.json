@@ -3,7 +3,7 @@
   "displayName": "Qwen Copilot",
   "description": "Qwen Code integration for Copilot Agent as a Language Model Chat Provider",
   "icon": "images/Qwen_logo.png",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "DenizhanDaklr",
   "license": "MIT",
   "repository": {
@@ -66,6 +66,11 @@
     "vitest": "4.0.17"
   },
   "dependencies": {
-    "openai": "4.104.0"
+    "axios": "^1.13.5",
+    "destr": "^2.0.5",
+    "neverthrow": "^8.2.0",
+    "openai": "4.104.0",
+    "safe-stable-stringify": "^2.5.0",
+    "ts-pattern": "^5.9.0"
   }
 }
