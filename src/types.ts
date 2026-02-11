@@ -1,4 +1,4 @@
-import type OpenAI from "openai";
+import type OpenAI from 'openai';
 
 export interface QwenCredentials {
   accessToken: string;
@@ -17,19 +17,19 @@ export interface QwenTokenResponse {
 }
 
 export const QWEN_MODELS = {
-  "qwen3-coder-plus": {
-    id: "qwen3-coder-plus",
-    displayName: "Qwen 3 Coder Plus",
-    family: "qwen3-coder",
-    version: "plus",
+  'qwen3-coder-plus': {
+    id: 'qwen3-coder-plus',
+    displayName: 'Qwen 3 Coder Plus',
+    family: 'qwen3-coder',
+    version: 'plus',
     contextWindow: 1000000,
     maxOutputTokens: 65536,
   },
-  "qwen3-coder-flash": {
-    id: "qwen3-coder-flash",
-    displayName: "Qwen 3 Coder Flash",
-    family: "qwen3-coder",
-    version: "flash",
+  'qwen3-coder-flash': {
+    id: 'qwen3-coder-flash',
+    displayName: 'Qwen 3 Coder Flash',
+    family: 'qwen3-coder',
+    version: 'flash',
     contextWindow: 1000000,
     maxOutputTokens: 65536,
   },
@@ -41,5 +41,5 @@ export type QwenTool = OpenAI.Chat.ChatCompletionTool;
 export type QwenToolChoice = OpenAI.Chat.ChatCompletionToolChoiceOption;
 
 export type QwenStreamEvent =
-  | { type: "text"; text: string }
-  | { type: "tool_call"; callId: string; name: string; input: object };
+  | {type: 'text'; text: string}
+  | {type: 'tool_call'; callId: string; name: string; input: object};

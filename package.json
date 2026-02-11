@@ -56,12 +56,19 @@
     "build": "tsc -p .",
     "dev": "tsc -w -p .",
     "test": "vitest",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "gsc": "gts",
+    "gsc:lint": "gts lint",
+    "gsc:fix": "gts fix",
+    "lint": "npm run gsc:lint",
+    "clean": "gts clean",
+    "fix": "npm run gsc:fix"
   },
   "devDependencies": {
     "@types/node": "20.19.30",
     "@types/vscode": "1.108.1",
     "@vscode/vsce": "3.7.1",
+    "gts": "^7.0.0",
     "typescript": "5.9.3",
     "vitest": "4.0.17"
   },
