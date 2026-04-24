@@ -169,7 +169,7 @@ class QwenClient {
       baseURL: authHandler.getBaseUrl() || QWEN_API_BASE,
       maxRetries: 0,
       defaultHeaders: {
-        'User-Agent': 'vscode-qwen-copilot/0.1.0',
+        'User-Agent': 'vscode-qwen-copilot/0.3.1',
       },
     });
     this.apiKey = apiKey;
